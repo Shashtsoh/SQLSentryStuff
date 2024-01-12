@@ -12,7 +12,7 @@
 .EXAMPLE
 	Place the following text into the PowerShell command window in the SentryOne PowerShell action:
         
-		& <path>\SNow_API-SentryOne_Close.ps1 -ServiceNowInstance <InstanceName>
+		& <path>\SQLSentry-ServiceNowAPI-Close.ps1 -ServiceNowInstance <InstanceName>
 .INPUTS
 	ServiceNowInstance
         String
@@ -24,7 +24,7 @@
 [CmdletBinding()]
 param (
 	[Parameter()]
-    [ValidateSet("lds","ldssand")]
+    [ValidateSet("<prodInstance>","<devInstance>")]
     [string]$ServiceNowInstance
 )
 
@@ -129,7 +129,7 @@ function create-alertobject {
 
 	$MessageObject.General.MessageProperties | Add-Member -NotePropertyName 'URL' -NotePropertyValue ((($MessageObject.MessageIn | Select-String -Pattern 'url:sqlsentry:\S*').Matches.Value).Replace('`r',''))
 	$MessageObject.ConditionIn = $MessageObject.General.MessageProperties.Condition
-	#Get Additional info about record from S1 database
+	#Get Additional info about record from SS database
 	try{
 		if($ConditionType -eq 'Legacy'){
 			$minutes = switch ($MessageObject.General.MessageProperties.'Response Ruleset') {
@@ -153,7 +153,7 @@ function create-alertobject {
 			where  ChainHead = 1 and NormalizedEventStartTime <= '$($MessageObject.General.MessageProperties."Timestamp (UTC)")'
 			order by id desc"
 
-			$extra = Invoke-DbaQuery -SqlInstance "$S1Instance" -Database SentryOne -SqlCredential $S1UtilityLogin -query $MessageObject.Misc.ExtrasQuery -ErrorAction Stop | select-object ID, CategoryName
+			$extra = Invoke-DbaQuery -SqlInstance "$SSInstance" -Database SentryOne -SqlCredential $SSUtilityLogin -query $MessageObject.Misc.ExtrasQuery -ErrorAction Stop | select-object ID, CategoryName
 			$MessageObject.General.HeadID = $extra.ID
 			$MessageObject.General.CategoryName = $extra.CategoryName
 			
@@ -199,11 +199,11 @@ function create-alertobject {
 			# Alert source is used by ServiceNow to help differentiate which event rule to use.  
 			# At least two rules are currently needed - one for alerts that can send a positive close signal and one for events that must time out to close
 			# The names here are somewhat arbitrary, but they must be unique and match the event rule filter in ServiceNow
-		$MessageObject.ServiceNow.AlertSourceInstance = "$S1Environment"
+		$MessageObject.ServiceNow.AlertSourceInstance = "$SSEnvironment"
 		$MessageObject.ServiceNow.Severity = "0"
 		
 		# $MessageObject.ServiceNow.EventID
-        # EventID is the Unique Key for the SN event record.  This must be unique per event from S1
+        # EventID is the Unique Key for the SN event record.  This must be unique per event from SS
         $eventID = switch ($ConditionType) {
             "Advisory" {$MessageObject.General.MessageProperties.URL}  #gets url from message if it exists
             "Legacy" {"$($MessageObject.ConditionIn)$($MessageObject.ObjectNameIn)$($MessageObject.General.HeadID)"}
@@ -223,15 +223,15 @@ function create-alertobject {
 #############
 #SentryOne
 #############
-$S1Instance = 'MSAOL12111\S01'
+$SSInstance = '<SQLSentry Repository Instance>'
 $crypt = '76492d1116743f0423413b16050a5345MgB8AHUAbwArAEMAaQBrAHIAegByAFMARQBqADkAUABjAFcAdQBKAE8AVQBtAHcAPQA9AHwAYwA1ADgAZgA1ADgANQBhADYANgAyADcAYgAwAGYAOQAyAGEAMQBjAGEAMwBmAGYAZAAyADkAZQBhADcANQA3AGMAMwBkADQANgBjADIAMwA4ADIAZQAzADAAMQBhAGYAOAAzADIAMgBjADcAOAA2AGIAYgAwAGQAYwA2AGQAYQA='
-[pscredential]$S1UtilityLogin = new-object System.Management.Automation.PSCredential ("S1_Script_Utility", (ConvertTo-SecureString -String $crypt -Key (1..16)))
+[pscredential]$SSUtilityLogin = new-object System.Management.Automation.PSCredential ("SS_Script_Utility", (ConvertTo-SecureString -String $crypt -Key (1..16)))
 
 #############
 #ServiceNow
 #############
 $ServiceNow = $true #Internal var to maintain code equivalance with the unified alert script, which uses this as a parameter
-$is_SN_live = $true #This internal flag lets us turn SN alerts on/off without changing calls in S1
+$is_SN_live = $true #This internal flag lets us turn SN alerts on/off without changing calls in SS
 $ServiceNowInstance = 'lds' #Use ldssand for the dev environment
 
 [net.ServicePointmanager]::SecurityProtocol = "tls12, tls11, tls"
@@ -243,7 +243,7 @@ $SNpass = ConvertTo-SecureString 'A@KvzpRgBB2q9G8hVy6&om86' -AsPlainText -Force
 #endregion Set Global Variables
 
 #region Queries
-# Query the S1 repo to get list of all event IDs to be closed
+# Query the SS repo to get list of all event IDs to be closed
 $q1 = "declare @Buffer_Min int;
 select @Buffer_Min = -5;
 with 
@@ -369,7 +369,7 @@ drop table #ac
 */"
 #endregion queries
 
-$idList = @(Invoke-DbaQuery -SqlInstance $S1Instance -Database SentryOne -SqlCredential $S1UtilityLogin -ReadOnly -Query $q1 | Sort-Object -Property EndTime -Descending)
+$idList = @(Invoke-DbaQuery -SqlInstance $SSInstance -Database SentryOne -SqlCredential $SSUtilityLogin -ReadOnly -Query $q1 | Sort-Object -Property EndTime -Descending)
 #| Where-Object ($_.NormalizedEndTimeUtc -ne "") 
 $lastClosedDate = $idList[0].EndTime
 
@@ -381,7 +381,7 @@ foreach ($i in $idList) # Loop through results and send close signal to SN for e
 	$additional = @{
 		"short_description" = "$($AlertObject.General.ShortDesc)"
 		"name" = $AlertObject.ObjectNameIn
-		"S1ResponseRuleset" = $AlertObject.General.MessageProperties.'Response RuleSet'
+		"SSResponseRuleset" = $AlertObject.General.MessageProperties.'Response RuleSet'
 		"portalURL" = "https://sqlsentry.ldschurch.org/"
 	} | ConvertTo-Json
 
@@ -413,7 +413,7 @@ foreach ($i in $idList) # Loop through results and send close signal to SN for e
     try{
         $response = $AlertObject.Output.ServiceNow = Invoke-RestMethod @parameters -ErrorAction Stop
         
-		$out = Invoke-DbaQuery -SqlInstance "$S1Instance" -Database SentryOne -SqlCredential $S1UtilityLogin -query $AlertObject.Misc.DeleteQueueQuery -ErrorAction Stop
+		$out = Invoke-DbaQuery -SqlInstance "$SSInstance" -Database SentryOne -SqlCredential $SSUtilityLogin -query $AlertObject.Misc.DeleteQueueQuery -ErrorAction Stop
 		$AlertObject.Output | Add-Member -NotePropertyName OpenQueue -NotePropertyValue $out
     } 
     catch{
@@ -423,7 +423,7 @@ foreach ($i in $idList) # Loop through results and send close signal to SN for e
 
 
 	$q2 = "update [custom].SNow_Last_Closed_Time set LastClearedEndTime = '$($lastClosedDate.Month)/$($lastClosedDate.Day)/$($lastClosedDate.Year) $($lastClosedDate.Hour):$($lastClosedDate.Minute):$($lastClosedDate.Second):$($lastClosedDate.Millisecond)' --main close script"
-	Invoke-DbaQuery -SqlInstance $S1Instance -Database SentryOne -SqlCredential $S1UtilityLogin -Query $q2
+	Invoke-DbaQuery -SqlInstance $SSInstance -Database SentryOne -SqlCredential $SSUtilityLogin -Query $q2
 
 
 

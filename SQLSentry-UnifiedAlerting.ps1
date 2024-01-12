@@ -23,7 +23,7 @@
             "EmailFrom" = '<somecustomemail>@ldschurch.org'
             "DebugAlert" = $false
         }
-        & <path>\S1_Unified_Alerts.ps1 @params  
+        & <path>\SQLSentry-UnifiedAlerting.ps1 @params  
     
     SQLSentry will parse its dedicated tokens (entries following the <%text%> pattern) and replace them as appropriate
     before executing the script.  Parameters with <> surrounding the value that are not SQLSentry tokens must be edited manually
@@ -42,12 +42,12 @@
         Specifies whether the condition is based off of a repository query instead of a 
         direct call to the monitored server.  Should only be set to true for advisory queries using a repository query.
         This changes how we must process certain sets of data, such as the servername passed to ServiceNow.
-    S1Environment
+    SSEnvironment
         String
         Default: Prod
         ValidateSet
             Prod
-        Only needed if there is more than one S1 install in the environment.  If/When more than one environment exists, 
+        Only needed if there is more than one SS install in the environment.  If/When more than one environment exists, 
         modify the ValidateSet options as needed.
     ServiceNow
         Bool
@@ -72,17 +72,17 @@
             0 - Clear alert (don't use in this script)
     MessageText
         String
-        Should always be submitted as the <%MessageText%> token when used from S1
+        Should always be submitted as the <%MessageText%> token when used from SS
     ServerName
         String
-        Should always be submitted as the <%ServerName%> token when used from S1
+        Should always be submitted as the <%ServerName%> token when used from SS
     ObjectName
         String
-        Should always be submitted as the <%ObjectName%> token when used from S1
+        Should always be submitted as the <%ObjectName%> token when used from SS
         Actual alerting object CI - anything from server to database to job
     Condition
         String
-        Should always be submitted as the <%Condition%> token when used from S1
+        Should always be submitted as the <%Condition%> token when used from SS
     EmailFrom
         String
         Lets us pick a custom from address for easier grouping in Outlook
@@ -104,7 +104,7 @@ param (
     [bool]$isRepositoryQuery = $false,
 
     [Parameter()]
-    [string]$S1Environment = "Prod", 
+    [string]$SSEnvironment = "Prod", 
 
     [Parameter()]
     [bool]$ServiceNow,
@@ -147,14 +147,14 @@ param (
 #############
 #SentryOne
 #############
-$S1Instance = 'MSAOL12111\S01'
+$SSInstance = 'MSAOL12111\S01'
 $crypt = '76492d1116743f0423413b16050a5345MgB8AHUAbwArAEMAaQBrAHIAegByAFMARQBqADkAUABjAFcAdQBKAE8AVQBtAHcAPQA9AHwAYwA1ADgAZgA1ADgANQBhADYANgAyADcAYgAwAGYAOQAyAGEAMQBjAGEAMwBmAGYAZAAyADkAZQBhADcANQA3AGMAMwBkADQANgBjADIAMwA4ADIAZQAzADAAMQBhAGYAOAAzADIAMgBjADcAOAA2AGIAYgAwAGQAYwA2AGQAYQA='
-[pscredential]$S1UtilityLogin = new-object System.Management.Automation.PSCredential ("S1_Script_Utility", (ConvertTo-SecureString -String $crypt -Key (1..16)))
+[pscredential]$SSUtilityLogin = new-object System.Management.Automation.PSCredential ("SS_Script_Utility", (ConvertTo-SecureString -String $crypt -Key (1..16)))
 
 #############
 #ServiceNow
 #############
-$is_SN_live = $true #This internal flag lets us turn SN alerts on/off without changing calls in S1
+$is_SN_live = $true #This internal flag lets us turn SN alerts on/off without changing calls in SS
 
 # API Creds.  User should be least privilige, with only the ability to post to the API.  Set up this way, we don't care about hardcoding credentials 
 # Code assumes that all possible instances use the same creds.  If this is not the case, additional logic will be needed to differentiate them.
@@ -165,7 +165,7 @@ $SNpass = ConvertTo-SecureString 'A@KvzpRgBB2q9G8hVy6&om86' -AsPlainText -Force
 #############
 #Teams
 #############
-$is_Teams_Live = $true #This internal flag lets us turn Teams alerts on/off without changing calls in S1
+$is_Teams_Live = $true #This internal flag lets us turn Teams alerts on/off without changing calls in SS
 # Teams connector URL
 $TeamsURI = 'https://office365lds.webhook.office.com/webhookb2/5c45be95-a591-4ec9-b82c-a78880d67d22@61e6eeb3-5fd7-4aaa-ae3c-61e8deb09b79/IncomingWebhook/bd465143d39a437681d7f7e2ddda1f8d/be8a6c5e-93f7-4288-9a9b-b40f18597046'
             
@@ -273,7 +273,7 @@ if($ConditionType -eq 'Advisory'){
     $facts += $MessageObject.General.MessageProperties.URL
 }
 
-#Get Additional info about record from S1 database
+#Get Additional info about record from SS database
 try{
     if($ConditionType -eq 'Legacy'){
         $minutes = switch ($MessageObject.General.MessageProperties.'Response Ruleset') {
@@ -297,7 +297,7 @@ try{
         where  ChainHead = 1 and NormalizedEventStartTime <= '$($MessageObject.General.MessageProperties."Timestamp (UTC)")'
         order by id desc"
 
-        $extra = Invoke-DbaQuery -SqlInstance "$S1Instance" -Database SentryOne -SqlCredential $S1UtilityLogin -query $MessageObject.Misc.ExtrasQuery -ErrorAction Stop | select-object ID, CategoryName
+        $extra = Invoke-DbaQuery -SqlInstance "$SSInstance" -Database SentryOne -SqlCredential $SSUtilityLogin -query $MessageObject.Misc.ExtrasQuery -ErrorAction Stop | select-object ID, CategoryName
         $MessageObject.General.HeadID = $extra.ID
         $MessageObject.General.CategoryName = $extra.CategoryName
     }
@@ -316,7 +316,7 @@ try{
                 and dateadd(ms, -1*datepart(ms,NormalizedEventEndTime),NormalizedEventEndTime) = '$($MessageObject.General.MessageProperties."Timestamp (UTC)")'
         "
         
-        $extra = Invoke-DbaQuery -SqlInstance "$S1Instance" -Database SentryOne -SqlCredential $S1UtilityLogin -query "$($MessageObject.Misc.ExtrasQuery)" -ErrorAction Stop #| select-object ID, CategoryName
+        $extra = Invoke-DbaQuery -SqlInstance "$SSInstance" -Database SentryOne -SqlCredential $SSUtilityLogin -query "$($MessageObject.Misc.ExtrasQuery)" -ErrorAction Stop #| select-object ID, CategoryName
 
         $MessageObject.General.ActionID = $extra.ID
         $MessageObject.General.CategoryName = $extra.CategoryName
@@ -355,11 +355,11 @@ if($ServiceNow -and $is_SN_live){
         # Alert source is used by ServiceNow to help differentiate which event rule to use.  
         # At least two rules are currently needed - one for alerts that can send a positive close signal and one for events that must time out to close
         # The names here are somewhat arbitrary, but they must be unique and match the event rule filter in ServiceNow
-    $MessageObject.ServiceNow.AlertSourceInstance = "$S1Environment"
+    $MessageObject.ServiceNow.AlertSourceInstance = "$SSEnvironment"
     $MessageObject.ServiceNow.Severity = "$Severity"
 
     # $MessageObject.ServiceNow.EventID
-        # EventID is the Unique Key for the SN event record.  This must be unique per event from S1
+        # EventID is the Unique Key for the SN event record.  This must be unique per event from SS
         $eventID = switch ($conditionType) {
             "Advisory" {(($MessageText | Select-String -Pattern 'url:sqlsentry:\S*').Matches.Value).Replace('`r','')}  #gets url from message if it exists
             "Legacy" {"$($MessageObject.ConditionIn)$($MessageObject.ObjectNameIn)$($MessageObject.General.HeadID)"}
@@ -393,7 +393,7 @@ if($ServiceNow -and $is_SN_live){
     $additional = @{
         "short_description" = "$($MessageObject.General.ShortDesc)"
         "name" = "$(if($ObjectName){"$($MessageObject.ObjectNameIn)"} else {"N/A"})"
-        "S1ResponseRuleset" = $MessageObject.General.MessageProperties.'Response RuleSet'
+        "SSResponseRuleset" = $MessageObject.General.MessageProperties.'Response RuleSet'
         "portalURL" = "https://sqlsentry.ldschurch.org/"
     } | ConvertTo-Json
 
@@ -430,9 +430,9 @@ if($ServiceNow -and $is_SN_live){
 
     try{
         if($ConditionType -eq 'Advisory'){
-            Invoke-DbaQuery -SqlInstance "$S1Instance" -Database SentryOne -SqlCredential $S1UtilityLogin -query "$($MessageObject.Misc.InsertQueueQuery)" -ErrorAction Stop | `
+            Invoke-DbaQuery -SqlInstance "$SSInstance" -Database SentryOne -SqlCredential $SSUtilityLogin -query "$($MessageObject.Misc.InsertQueueQuery)" -ErrorAction Stop | `
                 ConvertTo-DbaDataTable -ErrorAction Stop | `
-                Write-DbaDbTableData -SqlInstance "$S1Instance" -Database SentryOne -Schema Custom -Table SNow_Close_Queue -SqlCredential $S1UtilityLogin -ErrorAction Stop
+                Write-DbaDbTableData -SqlInstance "$SSInstance" -Database SentryOne -Schema Custom -Table SNow_Close_Queue -SqlCredential $SSUtilityLogin -ErrorAction Stop
             
                 $MessageObject.Output.ServiceNow.OpenQueue = "Insert Succeeded"
         }
